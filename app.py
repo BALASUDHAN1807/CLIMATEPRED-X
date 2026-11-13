@@ -346,7 +346,7 @@ Reanalysis (~50 km grid) is not station data and smooths neighbourhood-scale hea
 5. IPCC (2021). AR6 WG I, Ch. 11 — Weather and Climate Extreme Events in a Changing Climate.
 6. India Meteorological Department — heat-wave criteria. https://mausam.imd.gov.in/
 
-**Submitted by:** Balasudhan R (RA2411003012164) — 21CEO310T Global Warming and Climate Change, SRM IST Kattankulathur.
+**Team:** G. Sai Santosh Preetam (RA2411003012120), Charles Issac (RA2411003012121), Deepshika (RA2411003012122), Balasudhan R (RA2411003012164), Y. Gopi (RA2411003011400) — 21CEO310T Global Warming and Climate Change, SRM IST Kattankulathur.
 """
 
 # ----------------------------------------------------------------------------- UI
@@ -512,7 +512,7 @@ The simulator (sliders in the *Historical Prediction & Simulator* tab) takes a r
             gr.Image(FIG("arch.png"), label="System architecture")
             gr.File(P("reports/ClimatePred_AI_Technical_Report.pdf"), label="📄 Technical report (PDF)")
 
-    gr.Markdown("Predictions are research outputs, not official forecasts. © 2026 Balasudhan R — SRM IST.")
+    gr.Markdown("Predictions are research outputs, not official forecasts. © 2026 CLIMATEPRED AI team — SRM IST.")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
