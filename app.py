@@ -10,6 +10,9 @@ import numpy as np, pandas as pd, joblib, shap
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import gradio as gr
+import ghg
+import live
+from datetime import date as _date
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 P = lambda *a: os.path.join(HERE, *a)
@@ -121,6 +124,43 @@ def predict(city, date, solar_pct, cloud_add, rh_add, wind_add, history):
     if len(hist_df):
         hist_csv = P("data", "processed", "scenario_history.csv"); hist_df.to_csv(hist_csv, index=False)
     return md, fig_to_img(fig), fig_to_img(fig2), sim_img, history, hist_df, hist_csv
+
+
+# ----------------------------------------------------------------------------- live prediction (real-time data)
+def live_run(city):
+    try:
+        res = live.live_predict(city, reg, clf, FEATURES, RISK, explainer)
+    except Exception as e:
+        return (f"⚠️ Live data could not be fetched right now ({type(e).__name__}: {e}). The historical prediction tab still works. "
+                "Open-Meteo is a free public service; try again in a minute."), None, None
+    om = res["open_meteo_value_for_that_day"]
+    rows = [("Latest complete observation day", f"**{res['latest_observation_day']}**"),
+            ("Prediction for", f"**{res['prediction_for']}**"),
+            ("**Predicted maximum temperature**", f"**{res['predicted_tmax']} °C**"),
+            ("Heat-risk class", f"**{res['heat_risk']}**")]
+    if om is not None:
+        rows.append(("Open-Meteo's own value for that day (forecast/observed)", f"{om:.1f} °C"))
+    rows += [("Days of real observations fetched", str(res["fetched_days"])),
+             ("Fetched at", f"{pd.Timestamp.now(tz='Asia/Kolkata'):%Y-%m-%d %H:%M} IST")]
+    table = "| | |\n|---|---|\n" + "\n".join(f"| {a} | {b} |" for a, b in rows)
+    inputs = ", ".join(f"{k} {v}" for k, v in res["today_inputs"].items())
+    drivers = ", ".join(f"{k} {v:+.2f}" for k, v in res["drivers"].items())
+    md = (f"## {city} — live\n{table}\n\n**Inputs observed on the latest day:** {inputs}\n\n**Top SHAP drivers (°C):** {drivers}\n\n"
+          f"*Source: {res['source']}. The model was trained on NASA POWER; Open-Meteo is a different data product (ERA5/ICON), so units were converted "
+          "(wind 10 m → 2 m, hPa → kPa, W/m² → MJ/m²/day) and small systematic differences are possible. Research output, not an official IMD forecast.*")
+    r = res["recent"]
+    fig, ax = plt.subplots(figsize=(7, 3.6))
+    ax.plot(r.date, r.T2M_MAX, marker=".", color="#444", label="observed Tmax (Open-Meteo, last 30 days)")
+    ax.scatter([pd.Timestamp(res["prediction_for"])], [res["predicted_tmax"]], color="red", s=70, zorder=5, label="CLIMATEPRED prediction")
+    if om is not None:
+        ax.scatter([pd.Timestamp(res["prediction_for"])], [om], facecolors="none", edgecolors="green", s=90, zorder=5, label="Open-Meteo value")
+    ax.legend(fontsize=8); ax.set_ylabel("°C"); ax.set_title(f"{city}: recent observations and next-day prediction"); ax.tick_params(axis="x", rotation=30); plt.tight_layout()
+    d = pd.Series(res["drivers"])
+    fig2, ax2 = plt.subplots(figsize=(6, 3.4))
+    ax2.barh(d.index[::-1], d.values[::-1], color=["#d62728" if v > 0 else "#1f77b4" for v in d.values[::-1]]); ax2.axvline(0, color="k", lw=.8)
+    ax2.set_title("Why this prediction (SHAP, °C)"); plt.tight_layout()
+    return md, fig_to_img(fig), fig_to_img(fig2)
+
 
 # ----------------------------------------------------------------------------- overview
 def overview(city):
@@ -269,7 +309,7 @@ XAI_TEXT = """
 
 **Global findings** — Today's Tmax and the 7-/30-day rolling means dominate (thermal persistence). Next come rainfall and humidity (latent cooling → lower predictions), seasonality (day-of-year), solar radiation and cloud amount (more sun → hotter, more cloud → cooler). Location (lon/lat) matters only slightly: the model learned climate relationships, not city identity.
 
-**Individual explanation** — the waterfall below is for the hottest test day: Salem, 17 Apr 2024 (actual 41.3 °C, predicted 41.7 °C). Use the *Temperature Prediction* tab to get this explanation for any city and date.
+**Individual explanation** — the waterfall below is for the hottest test day: Salem, 17 Apr 2024 (actual 41.3 °C, predicted 41.7 °C). Use the *Historical Prediction & Simulator* tab to get this explanation for any city and date.
 """
 
 DOCS = f"""
@@ -326,7 +366,18 @@ with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft(primary_hue="orange"
             ov_city.change(overview, ov_city, [ov_kpi, ov_fig, ov_fig2, ov_tbl])
             demo.load(overview, ov_city, [ov_kpi, ov_fig, ov_fig2, ov_tbl])
 
-        with gr.Tab("02 · Temperature Prediction"):
+        with gr.Tab("02 · Live Prediction (real-time)"):
+            gr.Markdown("Fetches the **latest real observations** for the city (Open-Meteo, updated hourly), rebuilds the exact 24 training features from the last 45 days, "
+                        "and predicts the **next day's maximum temperature** with the trained XGBoost model. Nothing is pre-computed — click to fetch now.")
+            with gr.Row():
+                lv_city = gr.Dropdown(CITIES, value="Chennai", label="City")
+                lv_btn = gr.Button("Fetch live data & predict", variant="primary")
+            lv_md = gr.Markdown("*Click the button to fetch live data.*")
+            with gr.Row():
+                lv_f1 = gr.Image(label="Recent observations and prediction"); lv_f2 = gr.Image(label="SHAP drivers")
+            lv_btn.click(live_run, lv_city, [lv_md, lv_f1, lv_f2])
+
+        with gr.Tab("03 · Historical Prediction & Simulator"):
             gr.Markdown(f"Choose a city and the date of **today's observations**; the model predicts the **next day's maximum temperature**, its heat-risk class, and explains the prediction. "
                         f"Valid dates: **{DATE_MIN} → {DATE_MAX}** (latest available observation {DATE_MAX}; later dates would need live weather inputs).")
             with gr.Row():
@@ -350,7 +401,7 @@ with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft(primary_hue="orange"
             btn.click(predict, [city, date, solar, cloud, rh, wind, hist_state], [out, f1, f2, f3, hist_state, hist_tbl, hist_csv])
             demo.load(predict, [city, date, solar, cloud, rh, wind, hist_state], [out, f1, f2, f3, hist_state, hist_tbl, hist_csv])
 
-        with gr.Tab("03 · Dataset Explorer"):
+        with gr.Tab("04 · Dataset Explorer"):
             with gr.Row():
                 ex_city = gr.Dropdown(["All cities"] + CITIES, value="All cities", label="City")
                 ex_q = gr.Textbox(label="Search (e.g. 2024-05, Chennai, 41.3)", placeholder="type and press Enter")
@@ -370,7 +421,7 @@ with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft(primary_hue="orange"
             ex_page.release(explore, [ex_city, ex_q, ex_page], ex_outs)
             demo.load(explore, [ex_city, ex_q, ex_page], ex_outs)
 
-        with gr.Tab("04 · Preprocessing & EDA"):
+        with gr.Tab("05 · Preprocessing & EDA"):
             gr.Markdown(f"""
 ### A. Data cleaning (before → after)
 | Step | Finding | Treatment |
@@ -402,11 +453,11 @@ with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft(primary_hue="orange"
 | **Target** | **T2M_MAX of the next day** |""")
             gr.Image(FIG("18_split_timeline.png"), label="Chronological train / validation / test split")
 
-        with gr.Tab("05 · ML Model Laboratory"):
+        with gr.Tab("06 · ML Model Laboratory"):
             gr.Markdown(MODEL_LAB)
             gr.Dataframe(cmp_tbl.round(3), label="Full comparison table (validation + test, training time)", interactive=False)
 
-        with gr.Tab("06 · Model Evaluation"):
+        with gr.Tab("07 · Model Evaluation"):
             gr.Markdown("### Regression — next-day maximum temperature (test period Mar 2024 → Oct 2025)")
             gr.Dataframe(cmp_tbl[["Model", "Test MAE", "Test MSE", "Test RMSE", "Test R2"]].round(3), interactive=False)
             gr.Markdown(EVAL_TEXT)
@@ -420,7 +471,7 @@ with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft(primary_hue="orange"
             gr.Markdown("Accuracy ≈ 95 % and ROC-AUC ≈ 0.98, but macro-recall shows the rare *Extreme* class is hardest to catch; for public-health use, recall on Extreme would be the metric to optimise.")
             gr.Image(FIG("10_confusion_matrices.png"), label="Confusion matrices")
 
-        with gr.Tab("07 · Explainable AI"):
+        with gr.Tab("08 · Explainable AI"):
             gr.Markdown(XAI_TEXT)
             with gr.Row():
                 gr.Image(FIG("12_shap_bar.png"), label="A. Global feature importance (mean |SHAP|)")
@@ -428,9 +479,9 @@ with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft(primary_hue="orange"
             gr.Image(FIG("13_shap_dependence.png"), label="Dependence: humidity and solar radiation, coloured by cloud amount")
             gr.Image(FIG("14_shap_waterfall.png"), label="C. Individual prediction explanation — Salem, 17 Apr 2024")
 
-        with gr.Tab("08 · Climate Simulator"):
+        with gr.Tab("09 · Climate Simulator"):
             gr.Markdown("""
-The simulator (sliders in the *Temperature Prediction* tab) takes a real day, modifies environmental inputs that proxy urban cooling interventions, and re-runs the trained model:
+The simulator (sliders in the *Historical Prediction & Simulator* tab) takes a real day, modifies environmental inputs that proxy urban cooling interventions, and re-runs the trained model:
 
 | Slider | Urban intervention it proxies | Physical mechanism |
 |---|---|---|
@@ -444,10 +495,18 @@ The simulator (sliders in the *Temperature Prediction* tab) takes a real day, mo
 **How to read this** — effects are small because the inputs are grid-scale (~50 km) weather, so neighbourhood interventions are only proxied, and because the model leans heavily on thermal persistence. The outputs are the model's *learned sensitivity*, clearly labelled hypothetical; they are not causal estimates. Inputs are checked against the training-data range before prediction.""")
             gr.Image(FIG("15_scenario_sweep.png"), label="Sensitivity of predicted Tmax to solar radiation (Chennai)")
 
-        with gr.Tab("09 · Climate Science"):
+        with gr.Tab("10 · Climate Science"):
             gr.Markdown(SCIENCE)
+            gr.Markdown("## Historical greenhouse-gas concentrations and global temperature (public data)")
+            _g = ghg.load()
+            gr.Markdown(ghg.summary(_g))
+            gr.Image(fig_to_img(ghg.figure(_g)), label="CO₂, CH₄, N₂O concentrations and NASA GISTEMP global anomaly")
+            _cf, _r = ghg.correlation(_g)
+            if _cf is not None:
+                gr.Image(fig_to_img(_cf), label=f"CO₂ vs global temperature anomaly (Pearson r = {_r}) — a strong statistical relationship consistent with radiative-forcing physics; correlation alone is not the proof, the physics is")
+            gr.Markdown(ghg.DATA_NOTE)
 
-        with gr.Tab("10 · Research & Documentation"):
+        with gr.Tab("11 · Research & Documentation"):
             gr.Markdown(DOCS)
             gr.Image(FIG("arch.png"), label="System architecture")
             gr.File(P("reports/ClimatePred_AI_Technical_Report.pdf"), label="📄 Technical report (PDF)")
