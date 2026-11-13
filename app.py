@@ -58,15 +58,16 @@ def fig_to_img(fig):
     from PIL import Image; return Image.open(buf)
 
 # ----------------------------------------------------------------------------- prediction + simulator
-def predict(city, date, solar_pct, cloud_add, rh_add, wind_add):
+def predict(city, date, solar_pct, cloud_add, rh_add, wind_add, history):
+    history = history or []
     try:
         ts = pd.Timestamp(date)
     except Exception:
-        return f"⚠️ Invalid date. Use YYYY-MM-DD between {DATE_MIN} and {DATE_MAX}.", None, None, None
+        return f"⚠️ Invalid date. Use YYYY-MM-DD between {DATE_MIN} and {DATE_MAX}.", None, None, None, history, pd.DataFrame(history), None
     sel = data[(data.city == city) & (data.date == ts)]
     if sel.empty:
         return (f"⚠️ No observations for {city} on {date}. The dataset covers **{DATE_MIN} → {DATE_MAX}** "
-                f"(the model predicts the day after the chosen date; future dates need live weather inputs).", None, None, None)
+                f"(the model predicts the day after the chosen date; future dates need live weather inputs).", None, None, None, history, pd.DataFrame(history), None)
     row = sel.iloc[0]
     X = row[FEATURES].to_frame().T.astype(float)
     t = float(reg.predict(X)[0]); risk = RISK[int(clf.predict(X)[0])]
@@ -101,6 +102,9 @@ def predict(city, date, solar_pct, cloud_add, rh_add, wind_add):
         for b, v in zip(bars, [t, tsim]): ax.text(b.get_x() + b.get_width()/2, v + 0.05, f"{v:.2f} °C", ha="center", fontsize=10)
         lo = min(t, tsim) - 2; ax.set_ylim(lo, max(t, tsim) + 1); ax.set_ylabel("Predicted next-day Tmax (°C)"); ax.set_title("Baseline vs scenario")
         sim_img = fig_to_img(fig)
+        history = history + [{"city": city, "date": str(date), "solar_%": solar_pct, "cloud_+pp": cloud_add, "humidity_+pp": rh_add,
+                              "wind_+m/s": wind_add, "baseline_tmax": round(t, 2), "scenario_tmax": round(tsim, 2), "delta_C": round(tsim - t, 2),
+                              "baseline_risk": risk, "scenario_risk": rs, "within_training_range": ok}]
 
     top = sv.head(8)
     fig, ax = plt.subplots(figsize=(6, 3.6))
@@ -112,7 +116,11 @@ def predict(city, date, solar_pct, cloud_add, rh_add, wind_add):
     ax2.scatter([ts + pd.Timedelta(days=1)], [t], color="red", s=60, zorder=5, label="predicted tomorrow")
     ax2.scatter([ts + pd.Timedelta(days=1)], [row[TARGET]], facecolors="none", edgecolors="green", s=80, zorder=5, label="actual tomorrow")
     ax2.legend(fontsize=8); ax2.set_title("Recent history and prediction"); ax2.tick_params(axis="x", rotation=30); ax2.set_ylabel("°C")
-    return md, fig_to_img(fig), fig_to_img(fig2), sim_img
+    hist_df = pd.DataFrame(history)
+    hist_csv = None
+    if len(hist_df):
+        hist_csv = P("data", "processed", "scenario_history.csv"); hist_df.to_csv(hist_csv, index=False)
+    return md, fig_to_img(fig), fig_to_img(fig2), sim_img, history, hist_df, hist_csv
 
 # ----------------------------------------------------------------------------- overview
 def overview(city):
@@ -144,15 +152,38 @@ six = raw.groupby("city").agg(mean_T=("T2M", "mean"), mean_Tmax=("T2M_MAX", "mea
                               rain_per_year=("PRECTOTCORR", lambda s: s.sum() / (len(s) / 365.25)), solar=("ALLSKY_SFC_SW_DWN", "mean")).round(2).reset_index()
 
 # ----------------------------------------------------------------------------- dataset explorer
-def explore(city, n):
+def iqr_table(g):
+    rows = []
+    for col in WEATHER:
+        q1, q3 = g[col].quantile([0.25, 0.75]); iqr = q3 - q1
+        lo, hi = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        n = int(((g[col] < lo) | (g[col] > hi)).sum())
+        rows.append([col, round(lo, 2), round(hi, 2), n, round(100 * n / len(g), 2)])
+    return pd.DataFrame(rows, columns=["Variable", "IQR lower fence", "IQR upper fence", "Outliers", "Outliers %"])
+
+PAGE = 25
+def explore(city, query, page):
     g = raw if city == "All cities" else raw[raw.city == city]
+    if query and query.strip():
+        q = query.strip()
+        try:   # date / year search, else free-text match on any column
+            mask = g.astype(str).apply(lambda col: col.str.contains(q, case=False, regex=False)).any(axis=1)
+            g = g[mask]
+        except Exception:
+            pass
+    n_pages = max(1, int(np.ceil(len(g) / PAGE)))
+    page = int(min(max(1, page), n_pages))
+    view = g.iloc[(page - 1) * PAGE: page * PAGE].reset_index(drop=True)
     quality = pd.DataFrame({"Column": g.columns, "dtype": g.dtypes.astype(str).values, "Missing": g.isna().sum().values,
                             "Missing %": (g.isna().mean() * 100).round(2).values, "Unique": g.nunique().values})
-    info = (f"**Rows:** {len(g):,} &nbsp;·&nbsp; **Columns:** {g.shape[1]} &nbsp;·&nbsp; **Duplicate (city,date) rows:** {int(g.duplicated(['city','date']).sum())} "
-            f"&nbsp;·&nbsp; **Missing cells:** {int(g.isna().sum().sum())} &nbsp;·&nbsp; **Date range:** {g.date.min().date()} → {g.date.max().date()}")
-    stats = g[WEATHER].describe().T.reset_index().rename(columns={"index": "feature"}).round(2)
-    stats.insert(2, "median", g[WEATHER].median().values.round(2))
-    return info, g.head(int(n)).reset_index(drop=True), quality, stats
+    info = (f"**Rows:** {len(g):,} &nbsp;·&nbsp; **Columns:** {g.shape[1]} &nbsp;·&nbsp; **Page {page} / {n_pages}** &nbsp;·&nbsp; "
+            f"**Duplicate (city,date) rows:** {int(g.duplicated(['city','date']).sum())} &nbsp;·&nbsp; **Missing cells:** {int(g.isna().sum().sum())} "
+            f"&nbsp;·&nbsp; **Period:** {g.date.min().date() if len(g) else '—'} → {g.date.max().date() if len(g) else '—'}\n\n"
+            "Provenance: NASA POWER Daily API (MERRA-2 reanalysis + CERES SYN1deg), community = AG, retrieved 13 Nov 2026; sentinel −999 = missing.")
+    stats = g[WEATHER].describe().T.reset_index().rename(columns={"index": "feature"}).round(2) if len(g) else pd.DataFrame()
+    if len(g): stats.insert(2, "median", g[WEATHER].median().values.round(2))
+    out_csv = P("data", "processed", "export_filtered.csv"); g.to_csv(out_csv, index=False)
+    return info, view, quality, stats, (iqr_table(g) if len(g) else pd.DataFrame()), out_csv, gr.update(maximum=n_pages, value=page)
 
 # ----------------------------------------------------------------------------- static text
 SCIENCE = f"""
@@ -278,7 +309,8 @@ Reanalysis (~50 km grid) is not station data and smooths neighbourhood-scale hea
 """
 
 # ----------------------------------------------------------------------------- UI
-with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft()) as demo:
+DARK_JS = "() => { document.documentElement.classList.add('dark'); document.body.classList.add('dark'); }"
+with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft(primary_hue="orange", neutral_hue="slate"), js=DARK_JS) as demo:
     gr.Markdown("# 🌡️ CLIMATEPRED AI\n### An Explainable Machine Learning Framework for Urban Heat Prediction, Climate Trend Analysis and Climate Risk Intelligence\n"
                 f"Real NASA POWER data · 6 Tamil Nadu cities · {DATE_MIN} → {DATE_MAX} · models trained in the Colab notebook and loaded here.")
     with gr.Tabs():
@@ -311,22 +343,32 @@ with gr.Blocks(title="CLIMATEPRED AI", theme=gr.themes.Soft()) as demo:
             with gr.Row():
                 f1 = gr.Image(label="SHAP explanation of this prediction"); f2 = gr.Image(label="Recent history vs prediction")
             f3 = gr.Image(label="Scenario comparison (appears when a slider is changed)")
-            btn.click(predict, [city, date, solar, cloud, rh, wind], [out, f1, f2, f3])
-            demo.load(predict, [city, date, solar, cloud, rh, wind], [out, f1, f2, f3])
+            gr.Markdown("#### Scenario history (this session)")
+            hist_state = gr.State([])
+            hist_tbl = gr.Dataframe(interactive=False)
+            hist_csv = gr.File(label="⬇️ Export scenario history (CSV)")
+            btn.click(predict, [city, date, solar, cloud, rh, wind, hist_state], [out, f1, f2, f3, hist_state, hist_tbl, hist_csv])
+            demo.load(predict, [city, date, solar, cloud, rh, wind, hist_state], [out, f1, f2, f3, hist_state, hist_tbl, hist_csv])
 
         with gr.Tab("03 · Dataset Explorer"):
             with gr.Row():
                 ex_city = gr.Dropdown(["All cities"] + CITIES, value="All cities", label="City")
-                ex_n = gr.Slider(5, 50, value=10, step=5, label="Preview rows")
+                ex_q = gr.Textbox(label="Search (e.g. 2024-05, Chennai, 41.3)", placeholder="type and press Enter")
+                ex_page = gr.Slider(1, 950, value=1, step=1, label="Page (25 rows per page)")
             ex_info = gr.Markdown()
-            ex_head = gr.Dataframe(label="Dataset preview", interactive=False)
+            ex_head = gr.Dataframe(label="Dataset table", interactive=False)
+            ex_csv = gr.File(label="⬇️ Export current selection as CSV")
             gr.Markdown("### Column dictionary (NASA POWER parameters)")
             gr.Dataframe(PARAM_DESC, interactive=False)
-            ex_q = gr.Dataframe(label="Data quality: types, missing values, unique counts", interactive=False)
+            ex_qual = gr.Dataframe(label="Data quality: types, missing values, unique counts", interactive=False)
+            ex_out = gr.Dataframe(label="Outlier detection (IQR rule, 1.5 × IQR fences) — outliers are kept: they are real extreme-weather days", interactive=False)
             ex_s = gr.Dataframe(label="Statistical summary (mean, median, std, min, quartiles, max)", interactive=False)
-            gr.Markdown(f"Download the raw per-city CSVs and the processed modelling table from the GitHub repository: {GITHUB_URL}/tree/main/data")
-            for c in (ex_city, ex_n): c.change(explore, [ex_city, ex_n], [ex_info, ex_head, ex_q, ex_s])
-            demo.load(explore, [ex_city, ex_n], [ex_info, ex_head, ex_q, ex_s])
+            gr.Markdown(f"Full raw per-city CSVs and the processed modelling table: {GITHUB_URL}/tree/main/data")
+            ex_outs = [ex_info, ex_head, ex_qual, ex_s, ex_out, ex_csv, ex_page]
+            ex_city.change(explore, [ex_city, ex_q, ex_page], ex_outs)
+            ex_q.submit(explore, [ex_city, ex_q, ex_page], ex_outs)
+            ex_page.release(explore, [ex_city, ex_q, ex_page], ex_outs)
+            demo.load(explore, [ex_city, ex_q, ex_page], ex_outs)
 
         with gr.Tab("04 · Preprocessing & EDA"):
             gr.Markdown(f"""
