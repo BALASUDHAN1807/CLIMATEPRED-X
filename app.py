@@ -84,4 +84,4 @@ with gr.Blocks(title="CLIMATEPRED AI") as demo:
     gr.Markdown("Predictions are research outputs, not official forecasts. Team: Balasudhan R, Deepshika — 21CEO310T.")
 
 if __name__ == "__main__":
-    demo.launch(share="--share" in sys.argv)
+    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)), share="--share" in sys.argv)
