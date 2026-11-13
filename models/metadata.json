@@ -1,0 +1,36 @@
+{
+  "features": [
+    "T2M",
+    "T2M_MAX",
+    "T2M_MIN",
+    "RH2M",
+    "PRECTOTCORR",
+    "WS2M",
+    "ALLSKY_SFC_SW_DWN",
+    "CLOUD_AMT",
+    "PS",
+    "tmax_lag1",
+    "tmax_lag2",
+    "tmax_lag3",
+    "tmax_lag7",
+    "tmax_roll7",
+    "tmax_roll30",
+    "tmax_std7",
+    "tmin_lag1",
+    "rain_roll3",
+    "diurnal_range",
+    "doy_sin",
+    "doy_cos",
+    "month",
+    "lat",
+    "lon"
+  ],
+  "target": "target_tmax_next",
+  "final_test_metrics": {
+    "MAE": 1.0018447681793385,
+    "MSE": 1.7201279756537868,
+    "RMSE": 1.3115364942134804,
+    "R2": 0.8755169230732586
+  },
+  "best_val_model": "Random Forest"
+}
