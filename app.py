@@ -5,7 +5,7 @@ Loads the models trained in ClimatePred_AI.ipynb (no training needed) and serves
     pip install -r requirements.txt
     python app.py
 """
-import io, json, os, sys
+import io, json, os, sys, logging
 import numpy as np, pandas as pd, joblib, shap
 import matplotlib; matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -131,8 +131,9 @@ def live_run(city):
     try:
         res = live.live_predict(city, reg, clf, FEATURES, RISK, explainer)
     except Exception as e:
+        import traceback, logging; logging.getLogger("climatepred").error("live_run failed: %s", traceback.format_exc())
         return (f"⚠️ Live data could not be fetched right now ({type(e).__name__}: {e}). The historical prediction tab still works. "
-                "Open-Meteo is a free public service; try again in a minute."), None, None
+                "Both Open-Meteo and NASA POWER were tried; please retry in a minute."), None, None
     om = res["open_meteo_value_for_that_day"]
     rows = [("Latest complete observation day", f"**{res['latest_observation_day']}**"),
             ("Prediction for", f"**{res['prediction_for']}**"),
@@ -512,6 +513,8 @@ The simulator (sliders in the *Historical Prediction & Simulator* tab) takes a r
             gr.File(P("reports/ClimatePred_AI_Technical_Report.pdf"), label="📄 Technical report (PDF)")
 
     gr.Markdown("Predictions are research outputs, not official forecasts. © 2026 Balasudhan R — SRM IST.")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
 if __name__ == "__main__":
     demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)), share="--share" in sys.argv)
