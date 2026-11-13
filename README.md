@@ -4,11 +4,15 @@ An Explainable Machine Learning Framework for Urban Heat Prediction, Climate Tre
 **21CEO310T – Global Warming and Climate Change · LLT / CLA-2 working model**
 Team: Balasudhan R (RA2411003012164), Deepshika (RA2411003012122) — SRM IST, Kattankulathur
 
+## Links
+- 🌐 **Live app:** https://climatepred-ai.onrender.com (free tier — first load after idle takes ~1 min)
+- 📓 **Colab notebook:** https://colab.research.google.com/drive/1W0NntVHDVVoxveGa4qT9vbZwPZe5ce0W?usp=sharing
+
 ## Contents
 | Path | What it is |
 |---|---|
 | `ClimatePred_AI.ipynb` | Complete, **already executed** notebook (data → EDA → features → 6 regressors → metrics → heat-risk classifiers → SHAP → simulator → Gradio UI) |
-| `app.py` | Standalone demo web app — loads the saved models, no training needed |
+| `app.py` | Web application (10 sections: overview, prediction, dataset explorer, EDA, model lab, evaluation, SHAP, simulator, climate science, documentation) — loads saved models, no training needed |
 | `data/raw/*.csv` | Real NASA POWER daily data, 6 Tamil Nadu cities, 2015-01-01 → 2025-10-31 |
 | `data/processed/climatepred_features.csv` | Engineered modelling table |
 | `models/` | Trained XGBoost regressor, Random Forest, heat-risk classifier, metadata |
