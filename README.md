@@ -2,7 +2,7 @@
 An Explainable Machine Learning Framework for Urban Heat Prediction, Climate Trend Analysis and Climate Risk Intelligence
 
 **21CEO310T – Global Warming and Climate Change · LLT / CLA-2 working model**
-Team: Balasudhan R (RA2411003012164), Deepshika (RA2411003012122) — SRM IST, Kattankulathur
+Submitted by: Balasudhan R (RA2411003012164) — SRM IST, Kattankulathur
 
 ## Links
 - 🌐 **Live app:** https://climatepred-ai.onrender.com (free tier — first load after idle takes ~1 min)
